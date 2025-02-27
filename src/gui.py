@@ -4,6 +4,9 @@ from tkinter import ttk
 import src.config
 import socket
 import time
+import platform
+import subprocess
+import concurrent.futures
 
 class GUI:
     def __init__(
@@ -16,6 +19,12 @@ class GUI:
         self.root = root
         self.root.title("小智语音控制")
         self.root.geometry("300x200")
+        
+        # 音量控制相关变量初始化
+        self.volume_timer = None
+        self.volume_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.last_volume = 50  # 初始音量值
+        self.volume_debounce_time = 300  # 防抖动时间(毫秒)
 
         # 状态显示
         self.status_frame = ttk.Frame(root)
@@ -33,7 +42,7 @@ class GUI:
             self.volume_frame,
             from_=0,
             to=100,
-            command=lambda v: self.update_volume(int(float(v)))
+            command=lambda v: self.handle_volume_change(int(float(v)))
         )
         self.volume_scale.set(50)
         self.volume_scale.pack(side=tk.LEFT, padx=10)
@@ -120,25 +129,64 @@ class GUI:
 
     def on_close(self):
         """关闭窗口时退出"""
+        if hasattr(self, 'volume_executor'):
+            self.volume_executor.shutdown(wait=False)
         self.root.destroy()
 
-
+    def handle_volume_change(self, volume: int):
+        """处理音量变化的防抖动函数
+        
+        Args:
+            volume: 音量值(0-100)
+        """
+        # 如果值没变，不做任何操作
+        if volume == self.last_volume:
+            return
+            
+        # 更新最后的音量值
+        self.last_volume = volume
+        
+        # 取消之前的定时任务（如果存在）
+        if self.volume_timer:
+            self.root.after_cancel(self.volume_timer)
+            
+        # 设置新的定时任务，延迟执行音量更新
+        self.volume_timer = self.root.after(
+            self.volume_debounce_time, 
+            lambda: self.volume_executor.submit(self.update_volume, volume)
+        )
+        
     def update_volume(self, volume: int):
         """更新系统音量
         Args:
             volume: 音量值(0-100)
         """
+        system = platform.system()
+        
         try:
-            from ctypes import cast, POINTER
-            from comtypes import CLSCTX_ALL
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            if system == "Windows":
+                # Windows音量控制
+                from ctypes import cast, POINTER
+                from comtypes import CLSCTX_ALL
+                from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume_control = cast(interface, POINTER(IAudioEndpointVolume))
+                devices = AudioUtilities.GetSpeakers()
+                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                volume_control = cast(interface, POINTER(IAudioEndpointVolume))
 
-            # 将0-100的值转换为-65.25到0的分贝值
-            volume_db = -65.25 * (1 - volume/100.0)
-            volume_control.SetMasterVolumeLevel(volume_db, None)
+                # 将0-100的值转换为-65.25到0的分贝值
+                volume_db = -65.25 * (1 - volume/100.0)
+                volume_control.SetMasterVolumeLevel(volume_db, None)
+            
+            elif system == "Darwin":  # macOS
+                # macOS音量控制 (使用osascript)
+                subprocess.run(["osascript", "-e", f"set volume output volume {volume}"], 
+                               capture_output=True)  # 捕获输出避免打印到控制台
+            
+            else:
+                print(f"不支持在 {system} 平台上设置音量")
+
+            print(f"音量设置为: {volume}")
+        
         except Exception as e:
             print(f"设置音量失败: {e}")
