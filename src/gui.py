@@ -1,12 +1,13 @@
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import src.config
 import socket
 import time
 import platform
 import subprocess
 import concurrent.futures
+from src.audio_transmission import check_microphone_permission  # 导入权限检查函数
 
 class GUI:
     def __init__(
@@ -58,10 +59,26 @@ class GUI:
 
         # 状态更新线程
         threading.Thread(target=self.update_status, daemon=True).start()
+        
+        # 检查麦克风权限
+        self.root.after(500, self.check_mic_permission)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.mainloop()
-
+    
+    def check_mic_permission(self):
+        """检查麦克风权限，并在必要时显示提示"""
+        if not check_microphone_permission():
+            messagebox.showwarning(
+                "需要麦克风权限", 
+                "请授予麦克风访问权限:\n"
+                "1. 打开 系统设置 > 隐私与安全性 > 麦克风\n"
+                "2. 找到 Python 或 Terminal 应用并允许访问\n"
+                "3. 重新启动本程序"
+            )
+            self.talk_btn.config(state="disabled")  # 禁用按钮
+            self.status_label.config(text="状态: 无麦克风权限")
+    
     def on_button_press(self, event):
         """按钮按下事件处理
         功能流程：
@@ -72,10 +89,9 @@ class GUI:
         """
         # 检查连接状态和会话
         if not self.mqtt_client.conn_state or not self.mqtt_client.session_id:
-            # 清理旧连接
-            if src.config.udp_socket:
-                src.config.udp_socket.close()
-                src.config.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # 清理旧连接状态
+            src.config.listen_state = None
+            
             # 发送设备握手协议
             hello_msg = {
                 "type": "hello",
@@ -89,7 +105,8 @@ class GUI:
                 }
             }
             self.mqtt_client.publish(hello_msg)
-
+            # 等待连接建立
+            time.sleep(0.5)
 
         # 中断正在播放的语音
         if self.mqtt_client.tts_state in ["start", "entence_start"]:
@@ -98,8 +115,10 @@ class GUI:
             })
 
         # 启动语音采集
-        session_id = self.mqtt_client.get_session_id()
+        session_id = self.mqtt_client.session_id
         if session_id:
+            # 设置监听状态为开始
+            src.config.listen_state = "start"
             listen_msg = {
                 "session_id": session_id,
                 "type": "listen",
@@ -112,7 +131,9 @@ class GUI:
         """按钮释放事件处理
         发送停止录音指令
         """
-        session_id = self.mqtt_client.get_session_id()
+        # 设置监听状态为停止
+        src.config.listen_state = "stop"
+        session_id = self.mqtt_client.session_id
         if session_id:
             stop_msg = {
                 "session_id": session_id,

@@ -4,8 +4,7 @@ import socket
 import threading
 import paho.mqtt.client as mqtt
 import src.config
-from audio_transmission import send_audio,recv_audio
-import src.config
+from src.audio_transmission import send_audio, recv_audio
 
 
 class MQTTClient:
@@ -181,21 +180,33 @@ class MQTTClient:
                 logging.error("❌ UDP配置信息不完整")
                 return
 
-            # 重新创建 UDP 连接
+            # 先停止旧的音频线程
+            self._stop_audio_threads()
+            
+            # 安全关闭旧的UDP套接字
             if src.config.udp_socket:
-                src.config.udp_socket.close()
+                try:
+                    src.config.udp_socket.close()
+                except:
+                    pass
+                src.config.udp_socket = None
+                
+            # 创建新的UDP套接字
             src.config.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            src.config.udp_socket.connect((msg['udp']['server'], msg['udp']['port']))
-
-            # 更新会话信息
+            
+            # 设置套接字选项
+            src.config.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            # 更新会话信息 - 在连接之前更新
             src.config.aes_opus_info.update(msg)
             self.aes_opus_info = src.config.aes_opus_info
+            self.session_id = msg.get('session_id')
             self.conn_state = True
 
             # 启动音频处理线程
             self._start_audio_threads()
 
-            logging.info("✅ UDP连接已建立")
+            logging.info(f"✅ 已建立会话 ID: {self.session_id}")
 
         except Exception as e:
             logging.error(f"❌ 处理hello消息错误: {str(e)}")
@@ -232,17 +243,20 @@ class MQTTClient:
 
             logging.info("🔚 收到会话终止消息，清理资源")
 
-            # 关闭 UDP 连接
+            # 先停止音频线程
+            self._stop_audio_threads()
+            
+            # 安全关闭 UDP 连接
             if src.config.udp_socket:
-                src.config.udp_socket.close()
+                try:
+                    src.config.udp_socket.close()
+                except:
+                    pass
                 src.config.udp_socket = None
 
             # 重置状态
             self.aes_opus_info['session_id'] = None
             self.conn_state = False
-
-            # 停止音频线程
-            self._stop_audio_threads()
 
         except Exception as e:
             logging.error(f"❌ 处理goodbye消息错误: {str(e)}")
