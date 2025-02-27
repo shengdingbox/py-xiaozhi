@@ -45,6 +45,14 @@ git clone https://github.com/Huang-junsen/py-xiaozhi.git
 cd py-xiaozhi
 pip3 install -r requirements.txt
 ```
+### 使用虚拟环境进行依赖安装
+```bash
+// 创建虚拟环境：
+python3 -m venv .venv
+// 激活虚拟环境：
+source .venv/bin/activate
+pip3 install -r requirements.txt
+```
 
 ## 运行
 ```bash
